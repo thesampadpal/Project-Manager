@@ -123,7 +123,11 @@ export function useTasks() {
         { event: '*', schema: 'public', table: 'tasks' },
         (payload) => {
           if (payload.eventType === 'INSERT') {
-            setTasks((prev) => [...prev, rowToTask(payload.new as TaskRow)]);
+            const newTask = rowToTask(payload.new as TaskRow);
+            // Prevent duplicates from optimistic updates
+            setTasks((prev) =>
+              prev.some((t) => t.id === newTask.id) ? prev : [...prev, newTask]
+            );
           } else if (payload.eventType === 'UPDATE') {
             setTasks((prev) =>
               prev.map((t) =>
@@ -149,13 +153,23 @@ export function useTasks() {
   const addTask = useCallback(async (task: Task) => {
     const db = supabase;
     if (!db) return;
+    // Optimistic update - show immediately
+    setTasks((prev) => [...prev, task]);
     const { error } = await db.from('tasks').insert(taskToRow(task));
-    if (error) console.error('Error adding task:', error);
+    if (error) {
+      console.error('Error adding task:', error);
+      // Rollback on error
+      setTasks((prev) => prev.filter((t) => t.id !== task.id));
+    }
   }, []);
 
   const updateTask = useCallback(async (id: string, updates: Partial<Task>) => {
     const db = supabase;
     if (!db) return;
+    // Optimistic update
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
+    );
     const { error } = await db
       .from('tasks')
       .update(taskToRow(updates))
@@ -166,6 +180,8 @@ export function useTasks() {
   const deleteTask = useCallback(async (id: string) => {
     const db = supabase;
     if (!db) return;
+    // Optimistic update
+    setTasks((prev) => prev.filter((t) => t.id !== id));
     const { error } = await db.from('tasks').delete().eq('id', id);
     if (error) console.error('Error deleting task:', error);
   }, []);
@@ -211,7 +227,11 @@ export function useTodos() {
         { event: '*', schema: 'public', table: 'todos' },
         (payload) => {
           if (payload.eventType === 'INSERT') {
-            setTodos((prev) => [...prev, rowToTodo(payload.new as TodoRow)]);
+            const newTodo = rowToTodo(payload.new as TodoRow);
+            // Prevent duplicates from optimistic updates
+            setTodos((prev) =>
+              prev.some((t) => t.id === newTodo.id) ? prev : [...prev, newTodo]
+            );
           } else if (payload.eventType === 'UPDATE') {
             setTodos((prev) =>
               prev.map((t) =>
@@ -237,13 +257,22 @@ export function useTodos() {
   const addTodo = useCallback(async (todo: Todo) => {
     const db = supabase;
     if (!db) return;
+    // Optimistic update
+    setTodos((prev) => [...prev, todo]);
     const { error } = await db.from('todos').insert(todoToRow(todo));
-    if (error) console.error('Error adding todo:', error);
+    if (error) {
+      console.error('Error adding todo:', error);
+      setTodos((prev) => prev.filter((t) => t.id !== todo.id));
+    }
   }, []);
 
   const updateTodo = useCallback(async (id: string, updates: Partial<Todo>) => {
     const db = supabase;
     if (!db) return;
+    // Optimistic update
+    setTodos((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
+    );
     const { error } = await db
       .from('todos')
       .update(todoToRow(updates))
@@ -254,6 +283,8 @@ export function useTodos() {
   const deleteTodo = useCallback(async (id: string) => {
     const db = supabase;
     if (!db) return;
+    // Optimistic update
+    setTodos((prev) => prev.filter((t) => t.id !== id));
     const { error } = await db.from('todos').delete().eq('id', id);
     if (error) console.error('Error deleting todo:', error);
   }, []);
