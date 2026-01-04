@@ -1,6 +1,14 @@
 export type Priority = 'low' | 'medium' | 'high';
 export type Status = 'todo' | 'in-progress' | 'complete';
 
+export interface Project {
+  id: string;
+  name: string;
+  color: string;
+  description?: string;
+  createdAt: string;
+}
+
 export interface Subtask {
   id: string;
   text: string;
@@ -9,12 +17,14 @@ export interface Subtask {
 
 export interface Tag {
   id: string;
+  projectId: string;
   name: string;
   color: string;
 }
 
 export interface Task {
   id: string;
+  projectId: string;
   title: string;
   description: string;
   status: Status;
@@ -27,6 +37,7 @@ export interface Task {
 
 export interface Todo {
   id: string;
+  projectId: string;
   text: string;
   completed: boolean;
   createdAt: string;
@@ -39,7 +50,7 @@ export interface ColumnConfig {
   dotColor: string;
 }
 
-// Predefined tag colors
+// Predefined colors for tags and projects
 export const TAG_COLORS = [
   { name: 'Red', value: '#ef4444' },
   { name: 'Orange', value: '#f97316' },

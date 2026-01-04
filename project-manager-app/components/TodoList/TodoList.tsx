@@ -7,6 +7,7 @@ import { generateId } from '@/lib/utils';
 
 interface TodoListProps {
   todos: Todo[];
+  currentProjectId: string;
   onAddTodo: (todo: Todo) => Promise<void> | void;
   onUpdateTodo: (id: string, updates: Partial<Todo>) => Promise<void> | void;
   onDeleteTodo: (id: string) => Promise<void> | void;
@@ -15,6 +16,7 @@ interface TodoListProps {
 
 export default function TodoList({
   todos,
+  currentProjectId,
   onAddTodo,
   onUpdateTodo,
   onDeleteTodo,
@@ -30,6 +32,7 @@ export default function TodoList({
 
     const todo: Todo = {
       id: generateId(),
+      projectId: currentProjectId,
       text: newTodo.trim(),
       completed: false,
       createdAt: new Date().toISOString(),

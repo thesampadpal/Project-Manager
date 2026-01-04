@@ -10,6 +10,7 @@ interface TaskModalProps {
   onClose: () => void;
   task: Task | null;
   tags: Tag[];
+  currentProjectId: string;
   onAddTag: (tag: Tag) => Promise<void> | void;
   onSave: (taskData: Partial<Task>) => void;
   onDelete?: () => void;
@@ -32,6 +33,7 @@ export default function TaskModal({
   onClose,
   task,
   tags,
+  currentProjectId,
   onAddTag,
   onSave,
   onDelete,
@@ -105,6 +107,7 @@ export default function TaskModal({
 
     const newTag: Tag = {
       id: generateId(),
+      projectId: currentProjectId,
       name: newTagName.trim(),
       color: newTagColor,
     };

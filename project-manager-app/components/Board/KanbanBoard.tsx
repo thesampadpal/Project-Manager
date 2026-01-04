@@ -30,6 +30,7 @@ const columns: ColumnConfig[] = [
 interface KanbanBoardProps {
   tasks: Task[];
   tags: Tag[];
+  currentProjectId: string;
   onAddTask: (task: Task) => Promise<void> | void;
   onUpdateTask: (id: string, updates: Partial<Task>) => Promise<void> | void;
   onDeleteTask: (id: string) => Promise<void> | void;
@@ -42,6 +43,7 @@ interface KanbanBoardProps {
 export default function KanbanBoard({
   tasks,
   tags,
+  currentProjectId,
   onAddTask,
   onUpdateTask,
   onDeleteTask,
@@ -130,6 +132,7 @@ export default function KanbanBoard({
       // Create new task
       const newTask: Task = {
         id: generateId(),
+        projectId: currentProjectId,
         title: taskData.title || '',
         description: taskData.description || '',
         status: newTaskStatus,
@@ -216,6 +219,7 @@ export default function KanbanBoard({
         }}
         task={editingTask}
         tags={tags}
+        currentProjectId={currentProjectId}
         onAddTag={onAddTag}
         onSave={handleSaveTask}
         onDelete={editingTask ? () => handleDeleteTaskClick(editingTask.id) : undefined}

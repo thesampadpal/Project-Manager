@@ -1,34 +1,47 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { CheckSquare, FileText, Loader2, Cloud, CloudOff } from 'lucide-react';
+import { CheckSquare, FileText, Loader2, Cloud, CloudOff, ArrowLeft } from 'lucide-react';
 import Sidebar from '@/components/Layout/Sidebar';
 import KanbanBoard from '@/components/Board/KanbanBoard';
 import TodoList from '@/components/TodoList/TodoList';
 import Notes from '@/components/Notes/Notes';
 import SearchModal from '@/components/Search/SearchModal';
+import ProjectDashboard from '@/components/Dashboard/ProjectDashboard';
+import QuickCaptureButton from '@/components/QuickCapture/QuickCaptureButton';
+import QuickCaptureModal from '@/components/QuickCapture/QuickCaptureModal';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
-import { useTasks, useTodos, useTags, useNotes } from '@/hooks/useDatabase';
+import { useProjects, useTasks, useTodos, useTags, useNotes, useAllTasks } from '@/hooks/useDatabase';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { Task, Todo, Tag } from '@/types';
+import { Task, Todo, Tag, Project } from '@/types';
 
-// Default tags for localStorage fallback
-const DEFAULT_TAGS: Tag[] = [
-  { id: 'bug', name: 'Bug', color: '#ef4444' },
-  { id: 'feature', name: 'Feature', color: '#3b82f6' },
-  { id: 'urgent', name: 'Urgent', color: '#f97316' },
-  { id: 'improvement', name: 'Improvement', color: '#22c55e' },
-];
+type AppView = 'dashboard' | 'board';
 
 export default function Home() {
-  // Supabase hooks
+  // Navigation state
+  const [currentView, setCurrentView] = useState<AppView>('dashboard');
+  const [currentProjectId, setCurrentProjectId, projectIdLoaded] = useLocalStorage<string | null>('project-manager-current-project', null);
+
+  // Projects hook (always active)
+  const {
+    projects: dbProjects,
+    isLoading: projectsLoading,
+    addProject,
+    updateProject,
+    deleteProject,
+  } = useProjects();
+
+  // All tasks for dashboard stats
+  const { tasks: allDbTasks, isLoading: allTasksLoading } = useAllTasks();
+
+  // Project-scoped hooks (only used when viewing a project)
   const {
     tasks: dbTasks,
     isLoading: tasksLoading,
     addTask,
     updateTask,
     deleteTask,
-  } = useTasks();
+  } = useTasks(currentProjectId);
 
   const {
     todos: dbTodos,
@@ -36,25 +49,26 @@ export default function Home() {
     addTodo,
     updateTodo,
     deleteTodo,
-  } = useTodos();
+  } = useTodos(currentProjectId);
 
   const {
     tags: dbTags,
     isLoading: tagsLoading,
     addTag,
-  } = useTags();
+  } = useTags(currentProjectId);
 
   const {
     notes: dbNotes,
     isLoading: notesLoading,
     updateNotes,
-  } = useNotes();
+  } = useNotes(currentProjectId);
 
-  // LocalStorage fallback hooks
+  // LocalStorage fallback for projects
+  const [localProjects, setLocalProjects, localProjectsLoaded] = useLocalStorage<Project[]>('project-manager-projects', []);
   const [localTasks, setLocalTasks, localTasksLoaded] = useLocalStorage<Task[]>('project-manager-tasks', []);
   const [localTodos, setLocalTodos, localTodosLoaded] = useLocalStorage<Todo[]>('project-manager-todos', []);
-  const [localTags, setLocalTags, localTagsLoaded] = useLocalStorage<Tag[]>('project-manager-tags', DEFAULT_TAGS);
-  const [localNotes, setLocalNotes, localNotesLoaded] = useLocalStorage<string>('project-manager-notes', '');
+  const [localTags, setLocalTags, localTagsLoaded] = useLocalStorage<Tag[]>('project-manager-tags', []);
+  const [localNotes, setLocalNotes, localNotesLoaded] = useLocalStorage<Record<string, string>>('project-manager-notes', {});
 
   // UI state
   const [leftCollapsed, setLeftCollapsed] = useState(false);
@@ -63,17 +77,37 @@ export default function Home() {
   const [rightWidth, setRightWidth, rightWidthLoaded] = useLocalStorage<number>('project-manager-right-width', 288);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
+  const [isQuickCaptureOpen, setIsQuickCaptureOpen] = useState(false);
 
   // Determine which data source to use
   const useCloud = isSupabaseConfigured;
-  const tasks = useCloud ? dbTasks : localTasks;
-  const todos = useCloud ? dbTodos : localTodos;
-  const tags = useCloud ? dbTags : localTags;
-  const notes = useCloud ? dbNotes : localNotes;
+  const projects = useCloud ? dbProjects : localProjects;
+  const allTasks = useCloud ? allDbTasks : localTasks;
+  const tasks = useCloud ? dbTasks : localTasks.filter(t => t.projectId === currentProjectId);
+  const todos = useCloud ? dbTodos : localTodos.filter(t => t.projectId === currentProjectId);
+  const tags = useCloud ? dbTags : localTags.filter(t => t.projectId === currentProjectId);
+  const notes = useCloud ? dbNotes : (currentProjectId ? localNotes[currentProjectId] || '' : '');
+
+  const currentProject = projects.find(p => p.id === currentProjectId);
 
   const isLoading = useCloud
+    ? (projectsLoading || allTasksLoading)
+    : !(localProjectsLoaded && localTasksLoaded && projectIdLoaded);
+
+  const isBoardLoading = useCloud
     ? (tasksLoading || todosLoading || tagsLoading || notesLoading)
-    : !(localTasksLoaded && localTodosLoaded && localTagsLoaded && localNotesLoaded && leftWidthLoaded && rightWidthLoaded);
+    : !(localTodosLoaded && localTagsLoaded && localNotesLoaded && leftWidthLoaded && rightWidthLoaded);
+
+  // Navigate to project
+  const navigateToProject = useCallback((projectId: string) => {
+    setCurrentProjectId(projectId);
+    setCurrentView('board');
+  }, [setCurrentProjectId]);
+
+  // Navigate back to dashboard
+  const navigateToDashboard = useCallback(() => {
+    setCurrentView('dashboard');
+  }, []);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -86,42 +120,68 @@ export default function Home() {
 
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
-        setIsSearchOpen(true);
+        if (currentView === 'board') setIsSearchOpen(true);
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
         e.preventDefault();
-        setIsNewTaskOpen(true);
+        if (e.shiftKey) {
+          setIsQuickCaptureOpen(true);
+        } else if (currentView === 'board') {
+          setIsNewTaskOpen(true);
+        }
       }
       if (e.key === 'Escape') {
         setIsSearchOpen(false);
         setIsNewTaskOpen(false);
+        setIsQuickCaptureOpen(false);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [currentView]);
+
+  // Project handlers
+  const handleAddProject = useCallback(async (project: Project) => {
+    if (useCloud) {
+      await addProject(project);
+    } else {
+      setLocalProjects(prev => [...prev, project]);
+    }
+  }, [useCloud, addProject, setLocalProjects]);
+
+  const handleUpdateProject = useCallback(async (id: string, updates: Partial<Project>) => {
+    if (useCloud) {
+      await updateProject(id, updates);
+    } else {
+      setLocalProjects(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+    }
+  }, [useCloud, updateProject, setLocalProjects]);
+
+  const handleDeleteProject = useCallback(async (id: string) => {
+    if (useCloud) {
+      await deleteProject(id);
+    } else {
+      setLocalProjects(prev => prev.filter(p => p.id !== id));
+      setLocalTasks(prev => prev.filter(t => t.projectId !== id));
+      setLocalTodos(prev => prev.filter(t => t.projectId !== id));
+      setLocalTags(prev => prev.filter(t => t.projectId !== id));
+    }
+    if (currentProjectId === id) {
+      setCurrentProjectId(null);
+      setCurrentView('dashboard');
+    }
+  }, [useCloud, deleteProject, setLocalProjects, setLocalTasks, setLocalTodos, setLocalTags, currentProjectId, setCurrentProjectId]);
 
   // Task handlers
-  const setTasks = useCallback((value: Task[] | ((prev: Task[]) => Task[])) => {
-    if (useCloud) {
-      // For cloud, we handle individual operations
-      // This is called for bulk operations, which we need to handle differently
-      const newTasks = typeof value === 'function' ? value(tasks) : value;
-      // Sync to local storage as cache
-      setLocalTasks(newTasks);
-    } else {
-      setLocalTasks(value);
-    }
-  }, [useCloud, tasks, setLocalTasks]);
-
   const handleAddTask = useCallback(async (task: Task) => {
+    const taskWithProject = { ...task, projectId: currentProjectId! };
     if (useCloud) {
-      await addTask(task);
+      await addTask(taskWithProject);
     } else {
-      setLocalTasks(prev => [...prev, task]);
+      setLocalTasks(prev => [...prev, taskWithProject]);
     }
-  }, [useCloud, addTask, setLocalTasks]);
+  }, [useCloud, addTask, setLocalTasks, currentProjectId]);
 
   const handleUpdateTask = useCallback(async (id: string, updates: Partial<Task>) => {
     if (useCloud) {
@@ -140,19 +200,14 @@ export default function Home() {
   }, [useCloud, deleteTask, setLocalTasks]);
 
   // Todo handlers
-  const setTodos = useCallback((value: Todo[] | ((prev: Todo[]) => Todo[])) => {
-    if (!useCloud) {
-      setLocalTodos(value);
-    }
-  }, [useCloud, setLocalTodos]);
-
   const handleAddTodo = useCallback(async (todo: Todo) => {
+    const todoWithProject = { ...todo, projectId: currentProjectId! };
     if (useCloud) {
-      await addTodo(todo);
+      await addTodo(todoWithProject);
     } else {
-      setLocalTodos(prev => [...prev, todo]);
+      setLocalTodos(prev => [...prev, todoWithProject]);
     }
-  }, [useCloud, addTodo, setLocalTodos]);
+  }, [useCloud, addTodo, setLocalTodos, currentProjectId]);
 
   const handleUpdateTodo = useCallback(async (id: string, updates: Partial<Todo>) => {
     if (useCloud) {
@@ -171,19 +226,14 @@ export default function Home() {
   }, [useCloud, deleteTodo, setLocalTodos]);
 
   // Tag handlers
-  const setTags = useCallback((value: Tag[] | ((prev: Tag[]) => Tag[])) => {
-    if (!useCloud) {
-      setLocalTags(value);
-    }
-  }, [useCloud, setLocalTags]);
-
   const handleAddTag = useCallback(async (tag: Tag) => {
+    const tagWithProject = { ...tag, projectId: currentProjectId! };
     if (useCloud) {
-      await addTag(tag);
+      await addTag(tagWithProject);
     } else {
-      setLocalTags(prev => [...prev, tag]);
+      setLocalTags(prev => [...prev, tagWithProject]);
     }
-  }, [useCloud, addTag, setLocalTags]);
+  }, [useCloud, addTag, setLocalTags, currentProjectId]);
 
   // Notes handlers
   const setNotes = useCallback((value: string | ((prev: string) => string)) => {
@@ -191,14 +241,15 @@ export default function Home() {
     if (useCloud) {
       updateNotes(newValue);
     } else {
-      setLocalNotes(newValue);
+      setLocalNotes(prev => ({ ...prev, [currentProjectId!]: newValue }));
     }
-  }, [useCloud, notes, updateNotes, setLocalNotes]);
+  }, [useCloud, notes, updateNotes, setLocalNotes, currentProjectId]);
 
   // Promote todo to task
   const handlePromoteToTask = useCallback(async (todo: Todo) => {
     const newTask: Task = {
       id: todo.id,
+      projectId: currentProjectId!,
       title: todo.text,
       description: '',
       status: 'todo',
@@ -211,12 +262,30 @@ export default function Home() {
 
     await handleAddTask(newTask);
     await handleDeleteTodo(todo.id);
-  }, [handleAddTask, handleDeleteTodo]);
+  }, [handleAddTask, handleDeleteTodo, currentProjectId]);
 
   const handleSearchSelect = useCallback(() => {
     setIsSearchOpen(false);
   }, []);
 
+  // Quick capture handlers (items already have projectId)
+  const handleQuickCaptureTodo = useCallback(async (todo: Todo) => {
+    if (useCloud) {
+      await addTodo(todo);
+    } else {
+      setLocalTodos(prev => [...prev, todo]);
+    }
+  }, [useCloud, addTodo, setLocalTodos]);
+
+  const handleQuickCaptureTask = useCallback(async (task: Task) => {
+    if (useCloud) {
+      await addTask(task);
+    } else {
+      setLocalTasks(prev => [...prev, task]);
+    }
+  }, [useCloud, addTask, setLocalTasks]);
+
+  // Loading state
   if (isLoading) {
     return (
       <div className="h-screen flex items-center justify-center bg-bg">
@@ -227,6 +296,19 @@ export default function Home() {
 
   return (
     <div className="h-screen flex overflow-hidden bg-bg">
+      {/* Quick Capture Button */}
+      <QuickCaptureButton onClick={() => setIsQuickCaptureOpen(true)} />
+
+      {/* Quick Capture Modal */}
+      <QuickCaptureModal
+        isOpen={isQuickCaptureOpen}
+        onClose={() => setIsQuickCaptureOpen(false)}
+        projects={projects}
+        currentProjectId={currentProjectId}
+        onAddTodo={handleQuickCaptureTodo}
+        onAddTask={handleQuickCaptureTask}
+      />
+
       {/* Connection Status Indicator */}
       <div className="fixed bottom-4 right-4 z-50">
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs ${
@@ -237,61 +319,108 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Left Sidebar - Quick Tasks */}
-      <Sidebar
-        title="Quick Tasks"
-        icon={<CheckSquare size={18} />}
-        isCollapsed={leftCollapsed}
-        onToggle={() => setLeftCollapsed(!leftCollapsed)}
-        side="left"
-        width={leftWidth}
-        onWidthChange={setLeftWidth}
-      >
-        <TodoList
-          todos={todos}
-          onAddTodo={handleAddTodo}
-          onUpdateTodo={handleUpdateTodo}
-          onDeleteTodo={handleDeleteTodo}
-          onPromoteToTask={handlePromoteToTask}
+      {currentView === 'dashboard' ? (
+        /* Dashboard View */
+        <ProjectDashboard
+          projects={projects}
+          allTasks={allTasks}
+          onSelectProject={navigateToProject}
+          onAddProject={handleAddProject}
+          onUpdateProject={handleUpdateProject}
+          onDeleteProject={handleDeleteProject}
         />
-      </Sidebar>
+      ) : (
+        /* Board View */
+        <>
+          {isBoardLoading ? (
+            <div className="flex-1 flex items-center justify-center">
+              <Loader2 className="w-8 h-8 text-accent animate-spin" />
+            </div>
+          ) : (
+            <>
+              {/* Left Sidebar - Quick Tasks */}
+              <Sidebar
+                title="Quick Tasks"
+                icon={<CheckSquare size={18} />}
+                isCollapsed={leftCollapsed}
+                onToggle={() => setLeftCollapsed(!leftCollapsed)}
+                side="left"
+                width={leftWidth}
+                onWidthChange={setLeftWidth}
+              >
+                <TodoList
+                  todos={todos}
+                  currentProjectId={currentProjectId!}
+                  onAddTodo={handleAddTodo}
+                  onUpdateTodo={handleUpdateTodo}
+                  onDeleteTodo={handleDeleteTodo}
+                  onPromoteToTask={handlePromoteToTask}
+                />
+              </Sidebar>
 
-      {/* Center - Kanban Board */}
-      <main className="flex-1 overflow-x-auto overflow-y-hidden min-w-0">
-        <KanbanBoard
-          tasks={tasks}
-          tags={tags}
-          onAddTask={handleAddTask}
-          onUpdateTask={handleUpdateTask}
-          onDeleteTask={handleDeleteTask}
-          onAddTag={handleAddTag}
-          isNewTaskOpen={isNewTaskOpen}
-          setIsNewTaskOpen={setIsNewTaskOpen}
-          onOpenSearch={() => setIsSearchOpen(true)}
-        />
-      </main>
+              {/* Center - Kanban Board */}
+              <main className="flex-1 overflow-x-auto overflow-y-hidden min-w-0 flex flex-col">
+                {/* Project Header */}
+                <div className="flex-shrink-0 px-6 py-4 border-b border-border flex items-center gap-4">
+                  <button
+                    onClick={navigateToDashboard}
+                    className="p-2 rounded-lg hover:bg-surface text-text-secondary hover:text-text transition-colors"
+                  >
+                    <ArrowLeft size={20} />
+                  </button>
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-3 h-3 rounded-full"
+                      style={{ backgroundColor: currentProject?.color }}
+                    />
+                    <h1 className="text-lg font-semibold text-text">
+                      {currentProject?.name || 'Project'}
+                    </h1>
+                  </div>
+                </div>
 
-      {/* Right Sidebar - Notes */}
-      <Sidebar
-        title="Notes"
-        icon={<FileText size={18} />}
-        isCollapsed={rightCollapsed}
-        onToggle={() => setRightCollapsed(!rightCollapsed)}
-        side="right"
-        width={rightWidth}
-        onWidthChange={setRightWidth}
-      >
-        <Notes notes={notes} setNotes={setNotes} />
-      </Sidebar>
+                {/* Board */}
+                <div className="flex-1 overflow-x-auto overflow-y-hidden">
+                  <KanbanBoard
+                    tasks={tasks}
+                    tags={tags}
+                    currentProjectId={currentProjectId!}
+                    onAddTask={handleAddTask}
+                    onUpdateTask={handleUpdateTask}
+                    onDeleteTask={handleDeleteTask}
+                    onAddTag={handleAddTag}
+                    isNewTaskOpen={isNewTaskOpen}
+                    setIsNewTaskOpen={setIsNewTaskOpen}
+                    onOpenSearch={() => setIsSearchOpen(true)}
+                  />
+                </div>
+              </main>
 
-      {/* Search Modal */}
-      <SearchModal
-        isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
-        tasks={tasks}
-        tags={tags}
-        onSelectTask={handleSearchSelect}
-      />
+              {/* Right Sidebar - Notes */}
+              <Sidebar
+                title="Notes"
+                icon={<FileText size={18} />}
+                isCollapsed={rightCollapsed}
+                onToggle={() => setRightCollapsed(!rightCollapsed)}
+                side="right"
+                width={rightWidth}
+                onWidthChange={setRightWidth}
+              >
+                <Notes notes={notes} setNotes={setNotes} />
+              </Sidebar>
+            </>
+          )}
+
+          {/* Search Modal */}
+          <SearchModal
+            isOpen={isSearchOpen}
+            onClose={() => setIsSearchOpen(false)}
+            tasks={tasks}
+            tags={tags}
+            onSelectTask={handleSearchSelect}
+          />
+        </>
+      )}
     </div>
   );
 }

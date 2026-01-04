@@ -33,6 +33,24 @@ export default function Card({ task, tags, isDragging = false, onEdit, onDelete 
   const borderColor = priorityColors[task.priority];
   const isBeingDragged = isDragging || isSortableDragging;
 
+  // Get deadline warning class
+  const getDeadlineClass = (dueDate: string | null, status: string): string => {
+    if (!dueDate || status === 'complete') return '';
+
+    const now = new Date();
+    const due = new Date(dueDate);
+    const nowOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dueOnly = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+    const diffDays = Math.ceil((dueOnly.getTime() - nowOnly.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (diffDays < 0) return 'deadline-overdue';
+    if (diffDays === 0) return 'deadline-today';
+    if (diffDays <= 2) return 'deadline-soon';
+    return '';
+  };
+
+  const deadlineClass = getDeadlineClass(task.dueDate, task.status);
+
   const getTagById = (tagId: string) => tags.find((t) => t.id === tagId);
   const completedSubtasks = task.subtasks?.filter((s) => s.completed).length || 0;
   const totalSubtasks = task.subtasks?.length || 0;
@@ -50,6 +68,7 @@ export default function Card({ task, tags, isDragging = false, onEdit, onDelete 
         transition-all duration-200
         hover:bg-surface-hover hover:border-border-light
         ${isBeingDragged ? 'opacity-50 shadow-lg scale-[1.02]' : ''}
+        ${deadlineClass}
       `}
       onClick={onEdit}
     >

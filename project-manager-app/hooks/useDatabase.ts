@@ -2,11 +2,20 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import { Task, Todo, Tag, Subtask } from '@/types';
+import { Task, Todo, Tag, Subtask, Project } from '@/types';
 
 // Database row types (snake_case from Supabase)
+interface ProjectRow {
+  id: string;
+  name: string;
+  color: string;
+  description: string;
+  created_at: string;
+}
+
 interface TaskRow {
   id: string;
+  project_id: string;
   title: string;
   description: string;
   status: string;
@@ -19,6 +28,7 @@ interface TaskRow {
 
 interface TodoRow {
   id: string;
+  project_id: string;
   text: string;
   completed: boolean;
   created_at: string;
@@ -26,20 +36,44 @@ interface TodoRow {
 
 interface TagRow {
   id: string;
+  project_id: string;
   name: string;
   color: string;
 }
 
 interface NotesRow {
-  id: number;
+  id: string;
+  project_id: string;
   content: string;
   updated_at: string;
 }
 
-// Convert database row to app type
+// ============ CONVERTERS ============
+
+function rowToProject(row: ProjectRow): Project {
+  return {
+    id: row.id,
+    name: row.name,
+    color: row.color,
+    description: row.description,
+    createdAt: row.created_at,
+  };
+}
+
+function projectToRow(project: Partial<Project>): Partial<ProjectRow> {
+  const row: Partial<ProjectRow> = {};
+  if (project.id !== undefined) row.id = project.id;
+  if (project.name !== undefined) row.name = project.name;
+  if (project.color !== undefined) row.color = project.color;
+  if (project.description !== undefined) row.description = project.description;
+  if (project.createdAt !== undefined) row.created_at = project.createdAt;
+  return row;
+}
+
 function rowToTask(row: TaskRow): Task {
   return {
     id: row.id,
+    projectId: row.project_id,
     title: row.title,
     description: row.description,
     status: row.status as Task['status'],
@@ -54,6 +88,7 @@ function rowToTask(row: TaskRow): Task {
 function taskToRow(task: Partial<Task>): Partial<TaskRow> {
   const row: Partial<TaskRow> = {};
   if (task.id !== undefined) row.id = task.id;
+  if (task.projectId !== undefined) row.project_id = task.projectId;
   if (task.title !== undefined) row.title = task.title;
   if (task.description !== undefined) row.description = task.description;
   if (task.status !== undefined) row.status = task.status;
@@ -68,6 +103,7 @@ function taskToRow(task: Partial<Task>): Partial<TaskRow> {
 function rowToTodo(row: TodoRow): Todo {
   return {
     id: row.id,
+    projectId: row.project_id,
     text: row.text,
     completed: row.completed,
     createdAt: row.created_at,
@@ -77,23 +113,141 @@ function rowToTodo(row: TodoRow): Todo {
 function todoToRow(todo: Partial<Todo>): Partial<TodoRow> {
   const row: Partial<TodoRow> = {};
   if (todo.id !== undefined) row.id = todo.id;
+  if (todo.projectId !== undefined) row.project_id = todo.projectId;
   if (todo.text !== undefined) row.text = todo.text;
   if (todo.completed !== undefined) row.completed = todo.completed;
   if (todo.createdAt !== undefined) row.created_at = todo.createdAt;
   return row;
 }
 
-// ============ TASKS HOOK ============
-export function useTasks() {
-  const [tasks, setTasks] = useState<Task[]>([]);
+function rowToTag(row: TagRow): Tag {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    name: row.name,
+    color: row.color,
+  };
+}
+
+function tagToRow(tag: Partial<Tag>): Partial<TagRow> {
+  const row: Partial<TagRow> = {};
+  if (tag.id !== undefined) row.id = tag.id;
+  if (tag.projectId !== undefined) row.project_id = tag.projectId;
+  if (tag.name !== undefined) row.name = tag.name;
+  if (tag.color !== undefined) row.color = tag.color;
+  return row;
+}
+
+// ============ PROJECTS HOOK ============
+export function useProjects() {
+  const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch initial data
   useEffect(() => {
     const db = supabase;
     if (!isSupabaseConfigured || !db) {
       setIsLoading(false);
+      return;
+    }
+
+    const fetchProjects = async () => {
+      try {
+        const { data, error } = await db
+          .from('projects')
+          .select('*')
+          .order('created_at', { ascending: true });
+
+        if (error) throw error;
+        setProjects((data || []).map(rowToProject));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch projects');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchProjects();
+
+    const channel = db
+      .channel('projects-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'projects' },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newProject = rowToProject(payload.new as ProjectRow);
+            setProjects((prev) =>
+              prev.some((p) => p.id === newProject.id) ? prev : [...prev, newProject]
+            );
+          } else if (payload.eventType === 'UPDATE') {
+            setProjects((prev) =>
+              prev.map((p) =>
+                p.id === (payload.new as ProjectRow).id
+                  ? rowToProject(payload.new as ProjectRow)
+                  : p
+              )
+            );
+          } else if (payload.eventType === 'DELETE') {
+            setProjects((prev) =>
+              prev.filter((p) => p.id !== (payload.old as ProjectRow).id)
+            );
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      db.removeChannel(channel);
+    };
+  }, []);
+
+  const addProject = useCallback(async (project: Project) => {
+    const db = supabase;
+    if (!db) return;
+    setProjects((prev) => [...prev, project]);
+    const { error } = await db.from('projects').insert(projectToRow(project));
+    if (error) {
+      console.error('Error adding project:', error);
+      setProjects((prev) => prev.filter((p) => p.id !== project.id));
+    }
+  }, []);
+
+  const updateProject = useCallback(async (id: string, updates: Partial<Project>) => {
+    const db = supabase;
+    if (!db) return;
+    setProjects((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, ...updates } : p))
+    );
+    const { error } = await db
+      .from('projects')
+      .update(projectToRow(updates))
+      .eq('id', id);
+    if (error) console.error('Error updating project:', error);
+  }, []);
+
+  const deleteProject = useCallback(async (id: string) => {
+    const db = supabase;
+    if (!db) return;
+    setProjects((prev) => prev.filter((p) => p.id !== id));
+    const { error } = await db.from('projects').delete().eq('id', id);
+    if (error) console.error('Error deleting project:', error);
+  }, []);
+
+  return { projects, setProjects, isLoading, error, addProject, updateProject, deleteProject };
+}
+
+// ============ TASKS HOOK ============
+export function useTasks(projectId: string | null) {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const db = supabase;
+    if (!isSupabaseConfigured || !db || !projectId) {
+      setIsLoading(false);
+      setTasks([]);
       return;
     }
 
@@ -102,6 +256,7 @@ export function useTasks() {
         const { data, error } = await db
           .from('tasks')
           .select('*')
+          .eq('project_id', projectId)
           .order('created_at', { ascending: true });
 
         if (error) throw error;
@@ -115,16 +270,112 @@ export function useTasks() {
 
     fetchTasks();
 
-    // Real-time subscription
     const channel = db
-      .channel('tasks-changes')
+      .channel(`tasks-changes-${projectId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tasks', filter: `project_id=eq.${projectId}` },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newTask = rowToTask(payload.new as TaskRow);
+            setTasks((prev) =>
+              prev.some((t) => t.id === newTask.id) ? prev : [...prev, newTask]
+            );
+          } else if (payload.eventType === 'UPDATE') {
+            setTasks((prev) =>
+              prev.map((t) =>
+                t.id === (payload.new as TaskRow).id
+                  ? rowToTask(payload.new as TaskRow)
+                  : t
+              )
+            );
+          } else if (payload.eventType === 'DELETE') {
+            setTasks((prev) =>
+              prev.filter((t) => t.id !== (payload.old as TaskRow).id)
+            );
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      db.removeChannel(channel);
+    };
+  }, [projectId]);
+
+  const addTask = useCallback(async (task: Task) => {
+    const db = supabase;
+    if (!db) return;
+    setTasks((prev) => [...prev, task]);
+    const { error } = await db.from('tasks').insert(taskToRow(task));
+    if (error) {
+      console.error('Error adding task:', error);
+      setTasks((prev) => prev.filter((t) => t.id !== task.id));
+    }
+  }, []);
+
+  const updateTask = useCallback(async (id: string, updates: Partial<Task>) => {
+    const db = supabase;
+    if (!db) return;
+    setTasks((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
+    );
+    const { error } = await db
+      .from('tasks')
+      .update(taskToRow(updates))
+      .eq('id', id);
+    if (error) console.error('Error updating task:', error);
+  }, []);
+
+  const deleteTask = useCallback(async (id: string) => {
+    const db = supabase;
+    if (!db) return;
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    const { error } = await db.from('tasks').delete().eq('id', id);
+    if (error) console.error('Error deleting task:', error);
+  }, []);
+
+  return { tasks, setTasks, isLoading, error, addTask, updateTask, deleteTask };
+}
+
+// ============ ALL TASKS HOOK (for dashboard stats) ============
+export function useAllTasks() {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const db = supabase;
+    if (!isSupabaseConfigured || !db) {
+      setIsLoading(false);
+      return;
+    }
+
+    const fetchAllTasks = async () => {
+      try {
+        const { data, error } = await db
+          .from('tasks')
+          .select('*')
+          .order('created_at', { ascending: true });
+
+        if (error) throw error;
+        setTasks((data || []).map(rowToTask));
+      } catch (err) {
+        console.error('Failed to fetch all tasks:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchAllTasks();
+
+    const channel = db
+      .channel('all-tasks-changes')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'tasks' },
         (payload) => {
           if (payload.eventType === 'INSERT') {
             const newTask = rowToTask(payload.new as TaskRow);
-            // Prevent duplicates from optimistic updates
             setTasks((prev) =>
               prev.some((t) => t.id === newTask.id) ? prev : [...prev, newTask]
             );
@@ -150,55 +401,20 @@ export function useTasks() {
     };
   }, []);
 
-  const addTask = useCallback(async (task: Task) => {
-    const db = supabase;
-    if (!db) return;
-    // Optimistic update - show immediately
-    setTasks((prev) => [...prev, task]);
-    const { error } = await db.from('tasks').insert(taskToRow(task));
-    if (error) {
-      console.error('Error adding task:', error);
-      // Rollback on error
-      setTasks((prev) => prev.filter((t) => t.id !== task.id));
-    }
-  }, []);
-
-  const updateTask = useCallback(async (id: string, updates: Partial<Task>) => {
-    const db = supabase;
-    if (!db) return;
-    // Optimistic update
-    setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
-    );
-    const { error } = await db
-      .from('tasks')
-      .update(taskToRow(updates))
-      .eq('id', id);
-    if (error) console.error('Error updating task:', error);
-  }, []);
-
-  const deleteTask = useCallback(async (id: string) => {
-    const db = supabase;
-    if (!db) return;
-    // Optimistic update
-    setTasks((prev) => prev.filter((t) => t.id !== id));
-    const { error } = await db.from('tasks').delete().eq('id', id);
-    if (error) console.error('Error deleting task:', error);
-  }, []);
-
-  return { tasks, setTasks, isLoading, error, addTask, updateTask, deleteTask };
+  return { tasks, isLoading };
 }
 
 // ============ TODOS HOOK ============
-export function useTodos() {
+export function useTodos(projectId: string | null) {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const db = supabase;
-    if (!isSupabaseConfigured || !db) {
+    if (!isSupabaseConfigured || !db || !projectId) {
       setIsLoading(false);
+      setTodos([]);
       return;
     }
 
@@ -207,6 +423,7 @@ export function useTodos() {
         const { data, error } = await db
           .from('todos')
           .select('*')
+          .eq('project_id', projectId)
           .order('created_at', { ascending: true });
 
         if (error) throw error;
@@ -221,14 +438,13 @@ export function useTodos() {
     fetchTodos();
 
     const channel = db
-      .channel('todos-changes')
+      .channel(`todos-changes-${projectId}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'todos' },
+        { event: '*', schema: 'public', table: 'todos', filter: `project_id=eq.${projectId}` },
         (payload) => {
           if (payload.eventType === 'INSERT') {
             const newTodo = rowToTodo(payload.new as TodoRow);
-            // Prevent duplicates from optimistic updates
             setTodos((prev) =>
               prev.some((t) => t.id === newTodo.id) ? prev : [...prev, newTodo]
             );
@@ -252,12 +468,11 @@ export function useTodos() {
     return () => {
       db.removeChannel(channel);
     };
-  }, []);
+  }, [projectId]);
 
   const addTodo = useCallback(async (todo: Todo) => {
     const db = supabase;
     if (!db) return;
-    // Optimistic update
     setTodos((prev) => [...prev, todo]);
     const { error } = await db.from('todos').insert(todoToRow(todo));
     if (error) {
@@ -269,7 +484,6 @@ export function useTodos() {
   const updateTodo = useCallback(async (id: string, updates: Partial<Todo>) => {
     const db = supabase;
     if (!db) return;
-    // Optimistic update
     setTodos((prev) =>
       prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
     );
@@ -283,7 +497,6 @@ export function useTodos() {
   const deleteTodo = useCallback(async (id: string) => {
     const db = supabase;
     if (!db) return;
-    // Optimistic update
     setTodos((prev) => prev.filter((t) => t.id !== id));
     const { error } = await db.from('todos').delete().eq('id', id);
     if (error) console.error('Error deleting todo:', error);
@@ -293,15 +506,16 @@ export function useTodos() {
 }
 
 // ============ TAGS HOOK ============
-export function useTags() {
+export function useTags(projectId: string | null) {
   const [tags, setTags] = useState<Tag[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const db = supabase;
-    if (!isSupabaseConfigured || !db) {
+    if (!isSupabaseConfigured || !db || !projectId) {
       setIsLoading(false);
+      setTags([]);
       return;
     }
 
@@ -310,10 +524,11 @@ export function useTags() {
         const { data, error } = await db
           .from('tags')
           .select('*')
+          .eq('project_id', projectId)
           .order('name', { ascending: true });
 
         if (error) throw error;
-        setTags(data || []);
+        setTags((data || []).map(rowToTag));
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to fetch tags');
       } finally {
@@ -324,17 +539,22 @@ export function useTags() {
     fetchTags();
 
     const channel = db
-      .channel('tags-changes')
+      .channel(`tags-changes-${projectId}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'tags' },
+        { event: '*', schema: 'public', table: 'tags', filter: `project_id=eq.${projectId}` },
         (payload) => {
           if (payload.eventType === 'INSERT') {
-            setTags((prev) => [...prev, payload.new as Tag]);
+            const newTag = rowToTag(payload.new as TagRow);
+            setTags((prev) =>
+              prev.some((t) => t.id === newTag.id) ? prev : [...prev, newTag]
+            );
           } else if (payload.eventType === 'UPDATE') {
             setTags((prev) =>
               prev.map((t) =>
-                t.id === (payload.new as Tag).id ? (payload.new as Tag) : t
+                t.id === (payload.new as TagRow).id
+                  ? rowToTag(payload.new as TagRow)
+                  : t
               )
             );
           } else if (payload.eventType === 'DELETE') {
@@ -349,18 +569,23 @@ export function useTags() {
     return () => {
       db.removeChannel(channel);
     };
-  }, []);
+  }, [projectId]);
 
   const addTag = useCallback(async (tag: Tag) => {
     const db = supabase;
     if (!db) return;
-    const { error } = await db.from('tags').insert(tag);
-    if (error) console.error('Error adding tag:', error);
+    setTags((prev) => [...prev, tag]);
+    const { error } = await db.from('tags').insert(tagToRow(tag));
+    if (error) {
+      console.error('Error adding tag:', error);
+      setTags((prev) => prev.filter((t) => t.id !== tag.id));
+    }
   }, []);
 
   const deleteTag = useCallback(async (id: string) => {
     const db = supabase;
     if (!db) return;
+    setTags((prev) => prev.filter((t) => t.id !== id));
     const { error } = await db.from('tags').delete().eq('id', id);
     if (error) console.error('Error deleting tag:', error);
   }, []);
@@ -369,15 +594,16 @@ export function useTags() {
 }
 
 // ============ NOTES HOOK ============
-export function useNotes() {
+export function useNotes(projectId: string | null) {
   const [notes, setNotes] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const db = supabase;
-    if (!isSupabaseConfigured || !db) {
+    if (!isSupabaseConfigured || !db || !projectId) {
       setIsLoading(false);
+      setNotes('');
       return;
     }
 
@@ -386,7 +612,7 @@ export function useNotes() {
         const { data, error } = await db
           .from('notes')
           .select('*')
-          .eq('id', 1)
+          .eq('project_id', projectId)
           .single();
 
         if (error && error.code !== 'PGRST116') throw error;
@@ -401,12 +627,14 @@ export function useNotes() {
     fetchNotes();
 
     const channel = db
-      .channel('notes-changes')
+      .channel(`notes-changes-${projectId}`)
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'notes' },
+        { event: '*', schema: 'public', table: 'notes', filter: `project_id=eq.${projectId}` },
         (payload) => {
-          setNotes((payload.new as NotesRow).content);
+          if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
+            setNotes((payload.new as NotesRow).content);
+          }
         }
       )
       .subscribe();
@@ -414,17 +642,23 @@ export function useNotes() {
     return () => {
       db.removeChannel(channel);
     };
-  }, []);
+  }, [projectId]);
 
   const updateNotes = useCallback(async (content: string) => {
     const db = supabase;
-    if (!db) return;
+    if (!db || !projectId) return;
+
+    // Upsert - insert or update
     const { error } = await db
       .from('notes')
-      .update({ content, updated_at: new Date().toISOString() })
-      .eq('id', 1);
+      .upsert({
+        id: `notes-${projectId}`,
+        project_id: projectId,
+        content,
+        updated_at: new Date().toISOString()
+      });
     if (error) console.error('Error updating notes:', error);
-  }, []);
+  }, [projectId]);
 
   return { notes, setNotes, isLoading, error, updateNotes };
 }
