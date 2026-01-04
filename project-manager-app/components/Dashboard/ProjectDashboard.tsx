@@ -26,11 +26,13 @@ export default function ProjectDashboard({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
 
-  const handleSaveProject = (project: Project) => {
+  const handleSaveProject = async (project: Project) => {
     if (editingProject) {
       onUpdateProject(project.id, project);
     } else {
-      onAddProject(project);
+      await onAddProject(project);
+      // Auto-open the new project
+      onSelectProject(project.id);
     }
     setEditingProject(null);
   };

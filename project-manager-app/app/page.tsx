@@ -288,14 +288,14 @@ export default function Home() {
   // Loading state
   if (isLoading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-bg">
+      <div className="h-full flex items-center justify-center bg-bg">
         <Loader2 className="w-8 h-8 text-accent animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="h-screen flex overflow-hidden bg-bg">
+    <div className="h-full flex overflow-hidden bg-bg relative">
       {/* Quick Capture Button */}
       <QuickCaptureButton onClick={() => setIsQuickCaptureOpen(true)} />
 
@@ -310,7 +310,7 @@ export default function Home() {
       />
 
       {/* Connection Status Indicator */}
-      <div className="fixed bottom-4 right-4 z-50">
+      <div className="absolute bottom-4 right-4 z-50">
         <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs ${
           useCloud ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'
         }`}>
